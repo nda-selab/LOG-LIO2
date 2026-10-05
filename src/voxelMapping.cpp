@@ -228,6 +228,16 @@ void RGBpointBodyLidarToIMU(PointType const * const pi, PointType * const po)
 double mean_preprocess = 0.0;
 void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
+    // Lookup-table generation mode:
+    // preprocess LiDAR scans only for building the lookup table,
+    // without passing empty point clouds to the SLAM pipeline.
+    if (p_pre->compute_table)
+    {
+        PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+        p_pre->process(msg, ptr);
+        return;
+    }
+
     auto time_offset = lidar_time_offset;
 //    std::printf("lidar offset:%f\n", lidar_time_offset);
     mtx_buffer.lock();
@@ -1305,7 +1315,7 @@ int main(int argc, char** argv)
         p_pre->range_image.computeMInverse();
         printf("Computing M inverse matrix.\n");
         printf(".....Saving range image lookup table....\n");
-        p_pre->range_image.saveLookupTable(p_pre->ring_table_dir, "ring" + std::to_string(N_SCAN));
+        p_pre->range_image.saveLookupTable(p_pre->ring_table_dir, "ring" + std::to_string(p_pre->N_SCANS));
     }
 
     //save globalPath

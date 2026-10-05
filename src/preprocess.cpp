@@ -481,6 +481,12 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
         TicToc t_nor;
         estimateNormals(pl_orig); // get cloud_with_normal
+
+        // Lookup-table generation mode:
+        // table is built in estimateNormals(), so skip normal-dependent SLAM processing.
+        if (compute_table)
+            return;
+
         if (runtime_log)
         {
             num_scans++;
