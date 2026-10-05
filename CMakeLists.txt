@@ -74,13 +74,10 @@ find_package(Eigen3 REQUIRED)
 find_package(PCL 1.7 REQUIRED)
 #find_package(GTSAM REQUIRED QUIET)
 
-## set OpenCV DIR
-if ($ENV{ROS_DISTRO} STREQUAL "kinetic")
-  Set(OpenCV_DIR "/home/hk/opencv-3.3.1/build") # important find opencv version
-else()
-  Set(OpenCV_DIR "/home/autolab/opencv-3.2.0/build") # important find opencv version, Neotic
-endif ()
-find_package(OpenCV 3.2 QUIET)
+find_package(OpenCV REQUIRED)
+
+message(STATUS "OpenCV version: ${OpenCV_VERSION}")
+message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
 
 
 message(Eigen: ${EIGEN3_INCLUDE_DIR})
