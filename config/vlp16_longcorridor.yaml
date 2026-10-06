@@ -14,9 +14,9 @@ preprocess:
     point_filter_num: 4
 
 mapping:
-    down_sample_size: 0.4
+    down_sample_size: 0.1
     max_iteration: 3
-    voxel_size: 0.4
+    voxel_size: 0.1
     max_layer: 3                # 4 layer, 0, 1, 2, 3
     layer_point_size: [ 5, 5, 5, 5, 5 ]
     plannar_threshold: 0.01
