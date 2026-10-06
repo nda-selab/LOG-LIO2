@@ -3,6 +3,8 @@
 #include <math.h>
 #include <thread>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <csignal>
 #include <unistd.h>
 #include <Python.h>
@@ -990,6 +992,114 @@ void saveVoxelMap(const string& voxel_map_file)
     }
     pcl::io::savePCDFile(voxel_map_file, planes);
 }
+static std::string formatParameterVector(const std::vector<double> &values)
+{
+    std::ostringstream out;
+    out << std::setprecision(12) << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << values[i];
+    }
+    out << "]";
+    return out.str();
+}
+
+static void logStartupParameters(const std::string &project_name)
+{
+    const char *lidar_name = "unknown";
+    switch (p_pre->lidar_type) {
+        case AVIA: lidar_name = "AVIA"; break;
+        case VELO16: lidar_name = "Velodyne"; break;
+        case OUST64: lidar_name = "Ouster"; break;
+        case KITTI: lidar_name = "KITTI"; break;
+    }
+
+    const char *time_unit_name = "unknown; fallback: milliseconds";
+    switch (p_pre->time_unit) {
+        case SEC: time_unit_name = "seconds"; break;
+        case MS: time_unit_name = "milliseconds"; break;
+        case US: time_unit_name = "microseconds"; break;
+        case NS: time_unit_name = "nanoseconds"; break;
+    }
+
+    // Log the loaded values, including defaults, before initializing processing.
+    std::ostringstream out;
+    out << std::boolalpha << std::setprecision(12)
+        << "\n========== LOG-LIO2 startup parameters =========="
+        << "\n[common]"
+        << "\n  lid_topic: " << lid_topic
+        << "\n  imu_topic: " << imu_topic
+        << "\n  time_sync_en: " << time_sync_en
+        << "\n  lidar_time_offset: " << lidar_time_offset << " s"
+        << "\n[preprocess]"
+        << "\n  lidar_type: " << p_pre->lidar_type << " (" << lidar_name << ")"
+        << "\n  scan_line: " << p_pre->N_SCANS
+        << "\n  scan_rate: " << p_pre->SCAN_RATE << " Hz"
+        << "\n  timestamp_unit: " << p_pre->time_unit << " (" << time_unit_name << ")"
+        << "\n  Horizon_SCAN: " << p_pre->Horizon_SCAN
+        << "\n  blind: " << p_pre->blind << " m"
+        << "\n  point_filter_num: " << p_pre->point_filter_num
+        << "\n  feature_extract_enable: " << p_pre->feature_enabled
+        << "\n[mapping]"
+        << "\n  det_range: " << DET_RANGE << " m"
+        << "\n  max_iteration: " << NUM_MAX_ITERATIONS
+        << "\n  max_points_size: " << max_points_size
+        << "\n  max_cov_points_size: " << max_cov_points_size
+        << "\n  layer_point_size: " << formatParameterVector(layer_point_size)
+        << "\n  max_layer: " << max_layer
+        << "\n  voxel_size: " << max_voxel_size << " m"
+        << "\n  down_sample_size: " << filter_size_surf_min << " m"
+        << "\n  plannar_threshold: " << min_eigen_value
+        << "\n  extrinsic_est_en: " << extrinsic_est_en
+        << "\n  extrinsic_T (m): " << formatParameterVector(extrinT)
+        << "\n  extrinsic_R (row-major): " << formatParameterVector(extrinR)
+        << "\n[noise_model]"
+        << "\n  ranging_cov: " << ranging_cov
+        << "\n  angle_cov: " << angle_cov
+        << "\n  gyr_cov: " << gyr_cov
+        << "\n  acc_cov: " << acc_cov
+        << "\n  b_gyr_cov: " << b_gyr_cov
+        << "\n  b_acc_cov: " << b_acc_cov
+        << "\n[normal]"
+        << "\n  project_name: " << project_name
+        << "\n  compute_table: " << p_pre->compute_table
+        << "\n  compute_normal: " << p_pre->compute_normal
+        << "\n  check_normal: " << check_normal
+        << "\n  roughness_max: " << roughness_max
+        << "\n  ring_table_dir (resolved): " << p_pre->ring_table_dir
+        << "\n[cov_scale]"
+        << "\n  roughness_cov_scale: " << roughness_cov_scale
+        << "\n  trace_scale: " << trace_scale
+        << "\n  local_tan_scale: " << local_tan_scale
+        << "\n  local_rad_scale: " << local_rad_scale
+        << "\n  incident_cov_scale: " << incident_cov_scale
+        << "\n  incident_cov_max: " << incident_cov_max
+        << "\n  roughness_cov_max: " << roughness_cov_max
+        << "\n  visual_ray_scale: " << visual_ray_scale
+        << "\n  visual_tan_scale: " << visual_tan_scale
+        << "\n  visual_a_scale: " << visual_a_scale
+        << "\n[cov_incremental]"
+        << "\n  normal_cov_threshold: " << normal_cov_threshold
+        << "\n  lambda_cov_threshold: " << lambda_cov_threshold
+        << "\n  normal_cov_update_interval: " << normal_cov_update_interval
+        << "\n  normal_cov_incre_min: " << normal_cov_incre_min
+        << "\n  num_update_thread: " << num_update_thread
+        << "\n[publish]"
+        << "\n  path_en: " << path_en
+        << "\n  scan_publish_en: " << scan_pub_en
+        << "\n  dense_publish_en: " << dense_pub_en
+        << "\n  scan_bodyframe_pub_en: " << scan_body_pub_en
+        << "\n  pub_voxel_map: " << publish_voxel_map
+        << "\n  publish_max_voxel_layer: " << publish_max_voxel_layer
+        << "\n[ground_truth]"
+        << "\n  extrinsic_T (m): " << formatParameterVector(gt_extrinT)
+        << "\n  extrinsic_R (row-major): " << formatParameterVector(gt_extrinR)
+        << "\n[log]"
+        << "\n  enable: " << runtime_pos_log
+        << "\n================================================";
+    ROS_INFO_STREAM(out.str());
+}
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "laserMapping");
@@ -1013,7 +1123,6 @@ int main(int argc, char** argv)
     nh.param<int>("mapping/max_layer", max_layer, 2);
     nh.param<double>("mapping/voxel_size", max_voxel_size, 1.0);
     nh.param<double>("mapping/down_sample_size", filter_size_surf_min, 0.5);
-    std::cout << "filter_size_surf_min:" << filter_size_surf_min << std::endl;
     nh.param<double>("mapping/plannar_threshold", min_eigen_value, 0.01);
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
@@ -1040,7 +1149,6 @@ int main(int argc, char** argv)
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
     nh.param<int>("preprocess/point_filter_num", p_pre->point_filter_num, 1);
     nh.param<bool>("preprocess/feature_extract_enable", p_pre->feature_enabled, false);
-    cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
     for (int i = 0; i < layer_point_size.size(); i++) {
         layer_size.push_back(layer_point_size[i]);
     }
@@ -1080,7 +1188,12 @@ int main(int argc, char** argv)
     ring_table_dir = pkg_path + ring_table_dir;
     p_pre->ring_table_dir = ring_table_dir;
     p_pre->runtime_log = runtime_pos_log;
-    cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
+
+    // for ground truth target
+    nh.param<vector<double>>("ground_truth/extrinsic_T", gt_extrinT, vector<double>());
+    nh.param<vector<double>>("ground_truth/extrinsic_R", gt_extrinR, vector<double>());
+
+    logStartupParameters(PROJECT_NAME);
     p_pre->initNormalEstimator();
 
     path.header.stamp    = ros::Time::now();
@@ -1109,8 +1222,6 @@ int main(int argc, char** argv)
 
 
     // for ground truth target
-    nh.param<vector<double>>("ground_truth/extrinsic_T", gt_extrinT, vector<double>());
-    nh.param<vector<double>>("ground_truth/extrinsic_R", gt_extrinR, vector<double>());
     gt_T_wrt_IMU<<VEC_FROM_ARRAY(gt_extrinT);
     gt_R_wrt_IMU<<MAT_FROM_ARRAY(gt_extrinR);
     FILE *fp_target;
