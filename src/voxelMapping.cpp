@@ -60,7 +60,8 @@ double total_distance = 0, lidar_end_time = 0, first_lidar_time = 0.0;
 int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
-bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
+bool   lidar_pushed, flg_first_scan = true, flg_EKF_inited;
+volatile std::sig_atomic_t flg_exit = 0;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 
 
@@ -159,9 +160,8 @@ shared_ptr<ImuProcess> p_imu(new ImuProcess());
 string bag_file_input;
 void SigHandle(int sig)
 {
-    flg_exit = true;
-    ROS_WARN("catch sig %d", sig);
-    sig_buffer.notify_all();
+    // Only signal-safe operations belong here; log from the main loop instead.
+    flg_exit = sig;
 }
 
 const bool var_contrast(pointWithCov &x, pointWithCov &y) {
@@ -1270,13 +1270,13 @@ int main(int argc, char** argv)
     double mean_scan_time = 0;
     int scan_index = 0;
 
-    signal(SIGINT, SigHandle);
-    ros::Rate rate(5000);
-    bool status = ros::ok();
-    while (status)
+    std::signal(SIGINT, SigHandle);
+    // Keep shutdown responsive even when rosbag stops publishing /clock.
+    ros::WallRate rate(5000);
+    while (ros::ok() && !flg_exit)
     {
-        if (flg_exit) break;
         ros::spinOnce();
+        if (!ros::ok() || flg_exit) break;
 
         if(sync_packages(Measures))
         {
@@ -1417,8 +1417,11 @@ int main(int argc, char** argv)
                 pubScanRoughness(rough_cov_pub, feats_undistort);
         }
 
-        status = ros::ok();
         rate.sleep();
+    }
+
+    if (flg_exit) {
+        ROS_INFO("Shutdown requested by signal %d; saving results.", static_cast<int>(flg_exit));
     }
 
     if (p_pre->compute_table) {
