@@ -11,7 +11,7 @@ preprocess:
     timestamp_unit: 2            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
     Horizon_SCAN: 1800           # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048)
     blind: 0.2
-    point_filter_num: 4
+    point_filter_num: 1
 
 mapping:
     down_sample_size: 0.1
