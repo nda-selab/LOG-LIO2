@@ -510,7 +510,10 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     std::vector<float> time_last(N_SCANS, 0.0);  // last offset time
     /*****************************************************************/
 
-    if (pl_orig->points[plsize - 1].time > 0)
+    if (std::any_of(pl_orig->points.begin(), pl_orig->points.end(),
+                    [](const PointXYZIRT &point) {
+                        return std::isfinite(point.time) && point.time > 0;
+                    }))
     {
       given_offset_time = true;
     }
@@ -609,13 +612,14 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
       for (int i = 0; i < plsize; i++)
       {
-        if (std::abs(pl_orig->points[i].time) < 1.0 / SCAN_RATE / 1800){
-//            std::printf("%d\n", i);
-            continue;
-        }
-        if (std::abs(pl_orig->points[i].time) > (1.0 / SCAN_RATE) * 1.1){
-//            std::printf("PT timestamp out of range: %d    frame ts: %f  point ts: %f\n",
-//                       i, msg->header.stamp.toSec(), pl_orig.points[i].time);
+        // The input time uses timestamp_unit; compare only after converting
+        // to seconds. Zero is a valid start-of-scan timestamp. Without point
+        // timestamps, keep the point for the yaw-based estimate below.
+        if (given_offset_time)
+        {
+          const double offset_seconds = pl_orig->points[i].time * time_unit_scale / 1000.0;
+          if (!std::isfinite(offset_seconds) || offset_seconds < 0.0 ||
+              offset_seconds > 1.1 / SCAN_RATE)
             continue;
         }
 
@@ -643,6 +647,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         if (!given_offset_time)
         {
           int layer = orig_pt.ring;
+          if (layer >= N_SCANS) continue;
           double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
 
           if (is_first[layer])
@@ -678,8 +683,8 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
           {
 //              if (!pointInImage(orig_pt, rowIdn, columnIdn))
 //                continue;
-              const int & index =  cloud2image[i];
-              if (compute_normal && index > 0)
+              const int index = compute_normal ? cloud2image[i] : -1;
+              if (compute_normal && index >= 0)
               {
                   int rowIdn, columnIdn;
                   rowIdn = index / image_cols;

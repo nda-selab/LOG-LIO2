@@ -122,3 +122,11 @@ target_include_directories(rs_to_velodyne PRIVATE ${PYTHON_INCLUDE_DIRS})
 add_executable(visualize_node src/visualizer_node.cpp)
 target_link_libraries(visualize_node  ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
 target_include_directories(visualize_node PRIVATE ${PYTHON_INCLUDE_DIRS})
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(log_lio_regression EXCLUDE_FROM_ALL
+    tests/regression.cpp src/preprocess.cpp src/ring_fals/range_image.cpp)
+  target_compile_options(log_lio_regression PRIVATE -O0 -g0)
+  target_link_libraries(log_lio_regression ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${OpenCV_LIBRARIES})
+  add_test(NAME log_lio_regression COMMAND log_lio_regression)
+endif()

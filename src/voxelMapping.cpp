@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <sstream>
 #include <csignal>
+#include <cstdint>
 #include <unistd.h>
 #include <Python.h>
 #include <so3_math.h>
@@ -29,12 +30,10 @@
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
-#define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
-double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_plot5[MAXN], s_plot6[MAXN], s_plot7[MAXN], s_plot8[MAXN], s_plot9[MAXN], s_plot10[MAXN], s_plot11[MAXN];
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false;
@@ -57,7 +56,8 @@ double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
 double filter_size_surf_min = 0;
 double total_distance = 0, lidar_end_time = 0, first_lidar_time = 0.0;
-int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
+int    effct_feat_num = 0, time_log_counter = 0, publish_count = 0;
+std::uint64_t scan_count = 0;
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_EKF_inited;
@@ -227,6 +227,19 @@ void RGBpointBodyLidarToIMU(PointType const * const pi, PointType * const po)
     po->normal_x = pi->normal_x;
 }
 
+// Called with mtx_buffer held. A new time epoch also requires resetting the
+// filter and map; stop cleanly so results from different epochs cannot mix.
+void stopOnTimeRewind(const char *sensor)
+{
+    lidar_buffer.clear();
+    time_buffer.clear();
+    imu_buffer.clear();
+    lidar_pushed = false;
+    ROS_ERROR("%s timestamp moved backwards. Saving results and stopping; "
+              "restart log_lio_node before replaying from the new timestamp.", sensor);
+    ros::shutdown();
+}
+
 double mean_preprocess = 0.0;
 void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
@@ -247,8 +260,9 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     double preprocess_start_time = omp_get_wtime();
     if (msg->header.stamp.toSec() + time_offset < last_timestamp_lidar)
     {
-        ROS_ERROR("lidar loop back, clear buffer");
-        lidar_buffer.clear();
+        stopOnTimeRewind("LiDAR");
+        mtx_buffer.unlock();
+        return;
     }
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
@@ -257,13 +271,13 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     time_buffer.push_back(msg->header.stamp.toSec() + time_offset);
     last_timestamp_lidar = msg->header.stamp.toSec() + time_offset;
     timestamps_lidar.push_back(last_timestamp_lidar);
-    s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
-    mean_preprocess = mean_preprocess * (scan_count - 1) / scan_count + s_plot11[scan_count] / scan_count;
+    const double preprocess_time = omp_get_wtime() - preprocess_start_time;
+    mean_preprocess += (preprocess_time - mean_preprocess) / scan_count;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 
     if (runtime_pos_log)
-        printf("[ pre-process ]: this time: %0.6f ms, mean : %0.6f ms\n", s_plot11[scan_count] * 1000, mean_preprocess * 1000);
+        printf("[ pre-process ]: this time: %0.6f ms, mean : %0.6f ms\n", preprocess_time * 1000, mean_preprocess * 1000);
 }
 
 double timediff_lidar_wrt_imu = 0.0;
@@ -318,10 +332,8 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
 
     if (timestamp < last_timestamp_imu)
     {
-//        ROS_WARN("imu loop back, clear buffer");
-//        imu_buffer.clear();
-        ROS_WARN("imu loop back, ignoring!!!");
-        ROS_WARN("current T: %f, last T: %f", timestamp, last_timestamp_imu);
+        std::lock_guard<std::mutex> lock(mtx_buffer);
+        stopOnTimeRewind("IMU");
         return;
     }
     // 剔除异常数据
@@ -645,7 +657,7 @@ void transformCloudNormalOMP(const state_ikfom &state_point, const PointCloudXYZ
     }
 }
 
-M3D transformLiDARCovToWorld(Eigen::Vector3d &p_lidar, const esekfom::esekf<state_ikfom, 12, input_ikfom>& kf, const Eigen::Matrix3d& COV_lidar)
+M3D transformLiDARCovToWorld(const Eigen::Vector3d &p_lidar, const esekfom::esekf<state_ikfom, 12, input_ikfom>& kf, const Eigen::Matrix3d& COV_lidar)
 {
     M3D point_crossmat;
     point_crossmat << SKEW_SYM_MATRX(p_lidar);
@@ -697,7 +709,8 @@ void prepareMapping(const state_ikfom &state_point, const PointCloudXYZI::Ptr &i
         pv.normal = normal_global.normalized();
 
 //        pv.cov_lidar = cov_measurement[i]; // cov in lidar frame
-        pv.cov = transformLiDARCovToWorld(pv.point, kf, cov_measurement[i]); // cov in world frame
+        const V3D p_lidar = p_c.getVector3fMap().cast<double>();
+        pv.cov = transformLiDARCovToWorld(p_lidar, kf, cov_measurement[i]); // cov in world frame
 
         pv.ray = pv.point - lid_pos;
         pv.p2lidar = pv.ray.norm();
@@ -874,6 +887,11 @@ void initCloudCovOMP()
 
 void saveTraj(const string & pose_target_file)
 {
+    if (timestamps_lidar.empty() || path_target_end.poses.empty())
+    {
+        ROS_WARN("No trajectory available; skipping trajectory save.");
+        return;
+    }
     //also interpolate pose at lidar begin time
     int begin_time_ptr = 0;
     int begin_time_size = timestamps_lidar.size();
@@ -959,6 +977,11 @@ void saveTraj(const string & pose_target_file)
 
 void saveVoxelMap(const string& voxel_map_file)
 {
+    if (voxel_map.empty())
+    {
+        ROS_WARN("No voxel map available; skipping map save.");
+        return;
+    }
     printf("\n..........Saving Voxel Map...........\n");
     printf("voxel map file: %s\n", voxel_map_file.c_str());
     std::vector<Plane> pub_plane_list;
