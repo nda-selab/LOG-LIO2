@@ -2,6 +2,7 @@
 #define VOXEL_MAP_UTIL_HPP
 #include "common_lib.h"
 #include "omp.h"
+#include <atomic>
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <Eigen/StdVector>
@@ -18,7 +19,7 @@
 #define HASH_P 116101
 #define MAX_N 10000000000
 
-static int plane_id = 0;
+static std::atomic<int> plane_id{0};
 extern int refine_maximum_iter, refine_en;
 extern bool check_normal;
 extern double incident_cov_scale, roughness_cov_scale, trace_scale, trace_outlier_t;
@@ -641,15 +642,13 @@ public:
       }
 
       if (!plane->is_init) {
-        plane->id = plane_id;
-        plane_id++;
+        plane->id = plane_id.fetch_add(1, std::memory_order_relaxed);
         plane->is_init = true;
       }
 
     } else {
       if (!plane->is_init) {
-        plane->id = plane_id;
-        plane_id++;
+        plane->id = plane_id.fetch_add(1, std::memory_order_relaxed);
         plane->is_init = true;
       }
       if (plane->last_update_points_size == 0) {

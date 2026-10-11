@@ -77,9 +77,9 @@ class ImuProcess
   V3D mean_acc;
   V3D mean_gyr;
   V3D angvel_last;
-  V3D acc_s_last;
+  V3D acc_s_last = V3D::Zero();
   double start_timestamp_;
-  double last_lidar_end_time_;
+  double last_lidar_end_time_ = -1.0;
   int    init_iter_num = 1;
   bool   b_first_frame_ = true;
   bool   imu_need_init_ = true;
@@ -92,6 +92,8 @@ ImuProcess::ImuProcess()
   Q = process_noise_cov();
   cov_acc       = V3D(0.1, 0.1, 0.1);
   cov_gyr       = V3D(0.1, 0.1, 0.1);
+  cov_acc_scale = cov_acc;
+  cov_gyr_scale = cov_gyr;
   cov_bias_gyr  = V3D(0.0001, 0.0001, 0.0001);
   cov_bias_acc  = V3D(0.0001, 0.0001, 0.0001);
   mean_acc      = V3D(0, 0, -1.0);
@@ -110,6 +112,9 @@ void ImuProcess::Reset()
   mean_acc      = V3D(0, 0, -1.0);
   mean_gyr      = V3D(0, 0, 0);
   angvel_last       = Zero3d;
+  acc_s_last.setZero();
+  last_lidar_end_time_ = -1.0;
+  b_first_frame_    = true;
   imu_need_init_    = true;
   start_timestamp_  = -1;
   init_iter_num     = 1;
@@ -215,6 +220,13 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
   init_P(21,21) = init_P(22,22) = 0.00001; 
   kf_state.change_P(init_P);
   last_imu_ = meas.imu.back();
+  last_lidar_end_time_ = meas.lidar_end_time;
+  angvel_last = V3D(last_imu_->angular_velocity.x, last_imu_->angular_velocity.y,
+                   last_imu_->angular_velocity.z) - init_state.bg;
+  const V3D last_acc(last_imu_->linear_acceleration.x, last_imu_->linear_acceleration.y,
+                     last_imu_->linear_acceleration.z);
+  acc_s_last = init_state.rot * (last_acc * G_m_s2 / mean_acc.norm() - init_state.ba)
+               + init_state.grav.get_vect();
 
 }
 
@@ -246,6 +258,11 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   double dt = 0;
 
   input_ikfom in;
+  // Retain a valid input even if all samples precede the last scan end.
+  in.acc = V3D(last_imu_->linear_acceleration.x, last_imu_->linear_acceleration.y,
+               last_imu_->linear_acceleration.z) * G_m_s2 / mean_acc.norm();
+  in.gyro = V3D(last_imu_->angular_velocity.x, last_imu_->angular_velocity.y,
+                last_imu_->angular_velocity.z);
   for (auto it_imu = v_imu.begin(); it_imu < (v_imu.end() - 1); it_imu++)
   {
     auto &&head = *(it_imu);
@@ -307,7 +324,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   if (lidar_type == 4) //specify for kitti date which without 'time'
       return;
   /*** undistort each lidar point (backward propagation) ***/
-  auto it_pcl = pcl_out.points.end() - 1;
+  auto it_pcl = pcl_out.points.rbegin();
   for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--)
   {
     auto head = it_kp - 1;
@@ -319,7 +336,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     acc_imu<<VEC_FROM_ARRAY(tail->acc);
     angvel_avr<<VEC_FROM_ARRAY(tail->gyr);
 
-    for(; it_pcl->curvature / double(1000) > head->offset_time; it_pcl --)
+    for (; it_pcl != pcl_out.points.rend() &&
+           it_pcl->curvature / double(1000) >= head->offset_time; ++it_pcl)
     {
       dt = it_pcl->curvature / double(1000) - head->offset_time;
 
@@ -338,7 +356,12 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
       it_pcl->y = P_compensate(1);
       it_pcl->z = P_compensate(2);
 
-      if (it_pcl == pcl_out.points.begin()) break;
+      // Normals are directions: apply the same rotation as the point, without
+      // translation, into the LiDAR frame at the end of the scan.
+      const V3D normal = it_pcl->getNormalVector3fMap().cast<double>();
+      const V3D normal_compensated = imu_state.offset_R_L_I.conjugate() *
+          (imu_state.rot.conjugate() * (R_i * (imu_state.offset_R_L_I * normal)));
+      it_pcl->getNormalVector3fMap() = normal_compensated.cast<float>();
     }
   }
 }
@@ -348,8 +371,10 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   double t1,t2,t3;
   t1 = omp_get_wtime();
 
-  if(meas.imu.empty()) {return;};
-  ROS_ASSERT(meas.lidar != nullptr);
+  ROS_ASSERT(cur_pcl_un_ != nullptr);
+  // Never let the caller reuse an output from a previous scan on early return.
+  cur_pcl_un_->clear();
+  if (meas.imu.empty() || !meas.lidar || meas.lidar->empty()) return;
 
   if (imu_need_init_)
   {

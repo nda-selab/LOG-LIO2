@@ -422,12 +422,9 @@ bool sync_packages(MeasureGroup &meas)
     }
 
     /*** push imu data, and pop from imu buffer ***/
-    double imu_time = imu_buffer.front()->header.stamp.toSec();
     meas.imu.clear();
-    while ((!imu_buffer.empty()) && (imu_time < lidar_end_time))
+    while (!imu_buffer.empty() && imu_buffer.front()->header.stamp.toSec() <= lidar_end_time)
     {
-        imu_time = imu_buffer.front()->header.stamp.toSec();
-        if(imu_time > lidar_end_time) break;
         meas.imu.push_back(imu_buffer.front());
         imu_buffer.pop_front();
     }
@@ -435,6 +432,11 @@ bool sync_packages(MeasureGroup &meas)
     lidar_buffer.pop_front();
     time_buffer.pop_front();
     lidar_pushed = false;
+    if (meas.imu.empty())
+    {
+        ROS_WARN("No IMU samples for this scan; dropping LiDAR scan.");
+        return false;
+    }
     return true;
 }
 
@@ -1316,7 +1318,7 @@ int main(int argc, char** argv)
             state_point = kf.get_x();
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
 
-            if (feats_undistort->empty() || (feats_undistort == NULL))
+            if (!feats_undistort || feats_undistort->empty())
             {
                 ROS_WARN("No point, skip this scan!\n");
                 continue;
