@@ -380,34 +380,28 @@ bool sync_packages(MeasureGroup &meas)
     {
         meas.lidar = lidar_buffer.front();
         meas.lidar_beg_time = time_buffer.front();
-        if (meas.lidar->points.size() <= 1) // time too little
+        // Point order is not necessarily chronological (e.g. ring-organized
+        // clouds). Curvature stores each point's offset in milliseconds.
+        double scan_duration = 0.0;
+        for (const auto &point : meas.lidar->points)
+        {
+            if (std::isfinite(point.curvature) && point.curvature >= 0.0f)
+                scan_duration = std::max(scan_duration, point.curvature / 1000.0);
+        }
+        if (meas.lidar->points.size() <= 1)
         {
             lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
             ROS_WARN("Too few input point cloud!\n");
         }
-        else if (meas.lidar->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime)
+        else if (scan_duration < 0.5 * lidar_mean_scantime)
         {
             lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
         }
         else
         {
-
-//            std::printf("\nFirst 100 points: \n");
-//            for(int i=0; i < 100; ++i){
-//                std::printf("%f ", meas.lidar->points[i].curvature  / double(1000));
-//            }
-//
-//            std::printf("\n Last 100 points: \n");
-//            for(int i=100; i >0; --i){
-//                std::printf("%f ", meas.lidar->points[meas.lidar->size() - i - 1].curvature / double(1000));
-//            }
-//            std::printf("last point offset time: %f\n", meas.lidar->points.back().curvature / double(1000));
-            scan_num ++;
-            lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
-//            lidar_end_time = meas.lidar_beg_time + (meas.lidar->points[meas.lidar->points.size() - 20]).curvature / double(1000);
-            lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
-//            std::printf("pcl_bag_time: %f\n", meas.lidar_beg_time);
-//            std::printf("lidar_end_time: %f\n", lidar_end_time);
+            ++scan_num;
+            lidar_end_time = meas.lidar_beg_time + scan_duration;
+            lidar_mean_scantime += (scan_duration - lidar_mean_scantime) / scan_num;
         }
 
         meas.lidar_end_time = lidar_end_time;

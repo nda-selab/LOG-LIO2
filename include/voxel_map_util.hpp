@@ -1359,24 +1359,26 @@ void BuildResidualListOMP(const unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
                             is_sucess, prob, single_ptpl);
       if (!is_sucess) {
         VOXEL_LOC near_position = position;
-        if (loc_xyz[0] >
+        // Centers and quarter lengths are in meters; compare world coordinates,
+        // not the voxel-index coordinates used for the map lookup above.
+        if (pv.point_world[0] >
             (current_octo->voxel_center_[0] + current_octo->quater_length_)) {
           near_position.x = near_position.x + 1;
-        } else if (loc_xyz[0] < (current_octo->voxel_center_[0] -
+        } else if (pv.point_world[0] < (current_octo->voxel_center_[0] -
                                  current_octo->quater_length_)) {
           near_position.x = near_position.x - 1;
         }
-        if (loc_xyz[1] >
+        if (pv.point_world[1] >
             (current_octo->voxel_center_[1] + current_octo->quater_length_)) {
           near_position.y = near_position.y + 1;
-        } else if (loc_xyz[1] < (current_octo->voxel_center_[1] -
+        } else if (pv.point_world[1] < (current_octo->voxel_center_[1] -
                                  current_octo->quater_length_)) {
           near_position.y = near_position.y - 1;
         }
-        if (loc_xyz[2] >
+        if (pv.point_world[2] >
             (current_octo->voxel_center_[2] + current_octo->quater_length_)) {
           near_position.z = near_position.z + 1;
-        } else if (loc_xyz[2] < (current_octo->voxel_center_[2] -
+        } else if (pv.point_world[2] < (current_octo->voxel_center_[2] -
                                  current_octo->quater_length_)) {
           near_position.z = near_position.z - 1;
         }

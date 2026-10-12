@@ -140,6 +140,59 @@ void testMissingImuSynchronization()
     require(imu_buffer.empty(), "matched IMU must be consumed once");
 }
 
+void testScanEndIndependentOfPointOrder()
+{
+    for (double previous_mean : {0.0, 0.1}) {
+        std::vector<float> offsets{0, 60, 120};
+        do {
+            lidar_buffer.clear();
+            time_buffer.clear();
+            imu_buffer.clear();
+            lidar_pushed = false;
+            lidar_mean_scantime = previous_mean;
+            scan_num = previous_mean > 0 ? 4 : 0;
+            const int previous_count = scan_num;
+            PointCloudXYZI::Ptr scan(new PointCloudXYZI);
+            for (float offset : offsets) {
+                PointType point{};
+                point.curvature = offset;
+                scan->push_back(point);
+            }
+            lidar_buffer.push_back(scan);
+            time_buffer.push_back(20);
+            imu_buffer.push_back(imuSample(20));
+            imu_buffer.push_back(imuSample(20.08));
+            last_timestamp_imu = 20.08;
+            MeasureGroup measure;
+            require(!sync_packages(measure),
+                    "must wait for IMU through the maximum point timestamp");
+            require(lidar_buffer.size() == 1 && imu_buffer.size() == 2,
+                    "waiting must not consume either sensor buffer");
+            require(std::abs(measure.lidar_end_time - 20.12) < 1e-10,
+                    "scan end must be independent of point order");
+            const double expected_mean = previous_mean +
+                (0.12 - previous_mean) / (previous_count + 1);
+            require(scan_num == previous_count + 1 &&
+                    std::abs(lidar_mean_scantime - expected_mean) < 1e-10,
+                    "duration statistics must use the maximum timestamp");
+            imu_buffer.push_back(imuSample(20.12));
+            imu_buffer.push_back(imuSample(20.14));
+            last_timestamp_imu = 20.14;
+            require(sync_packages(measure) && measure.imu.size() == 3,
+                    "must collect all IMU samples through the scan end");
+            require(imu_buffer.size() == 1 &&
+                    std::abs(imu_buffer.front()->header.stamp.toSec() - 20.14) < 1e-10,
+                    "IMU after the scan end must remain for the next scan");
+            require(scan_num == previous_count + 1,
+                    "waiting for IMU must not count a scan twice");
+            for (size_t i = 0; i < offsets.size(); ++i)
+                require(scan->points[i].curvature == offsets[i],
+                        "synchronization must preserve point order");
+        } while (std::next_permutation(offsets.begin(), offsets.end()));
+    }
+    imu_buffer.clear();
+}
+
 void testParallelPlaneIds()
 {
     std::vector<pointWithCov> points;
@@ -162,6 +215,65 @@ void testParallelPlaneIds()
     }
     require(std::set<int>(ids.begin(), ids.end()).size() == ids.size(),
             "concurrently initialized planes must have unique IDs");
+}
+
+void testNeighborVoxelSearch()
+{
+    const bool previous_check_normal = check_normal;
+    check_normal = false;
+    // Test all six faces and two diagonal neighbors, in positive and negative
+    // world coordinates, with voxel sizes both below and above one meter.
+    const std::vector<V3D> directions = {
+        V3D(-1, 0, 0), V3D(1, 0, 0), V3D(0, -1, 0), V3D(0, 1, 0),
+        V3D(0, 0, -1), V3D(0, 0, 1), V3D(-1, -1, -1), V3D(1, 1, 1)};
+    for (double size : {0.1, 0.5, 1.0, 1.6}) {
+        for (int cell : {-100, 100}) {
+            const V3D center = V3D::Constant((cell + 0.5) * size);
+            for (const V3D &direction : directions) {
+                OctoTree current(0, 0, {5}, 100, 100, 0.01);
+                OctoTree neighbor(0, 0, {5}, 100, 100, 0.01);
+                current.quater_length_ = size / 4;
+                for (int axis = 0; axis < 3; ++axis)
+                    current.voxel_center_[axis] = center[axis];
+                pointWithCov query{};
+                query.point_world = center + direction * (0.4 * size);
+                query.point = query.point_world;
+                query.cov = M3D::Identity() * 0.01;
+                query.cov_lidar = query.cov;
+                Plane &plane = *neighbor.plane_ptr_;
+                plane.is_plane = true;
+                plane.center = center + direction * size;
+                const V3D tangent = plane.center - query.point_world;
+                const V3D axis = direction.x() != 0 || direction.y() != 0 ?
+                                 V3D(0, 0, 1) : V3D(1, 0, 0);
+                plane.normal = tangent.cross(axis).normalized();
+                plane.d = -plane.normal.dot(plane.center);
+                plane.radius = size * 2;
+                query.normal = plane.normal.cast<float>();
+                std::unordered_map<VOXEL_LOC, OctoTree *> map;
+                map.emplace(VOXEL_LOC(cell, cell, cell), &current);
+                map.emplace(VOXEL_LOC(cell + int(direction.x()), cell + int(direction.y()),
+                                     cell + int(direction.z())), &neighbor);
+                std::vector<ptpl> matches;
+                std::vector<V3D> unmatched;
+                BuildResidualListOMP(map, size, 3, 0, {query}, V3F::Zero(), matches, unmatched);
+                require(matches.size() == 1 && (matches[0].center - plane.center).norm() < 1e-10,
+                        "boundary point must match the plane in the correct neighboring voxel");
+                // Existing same-voxel matches must continue to take priority.
+                *current.plane_ptr_ = plane;
+                current.plane_ptr_->center = query.point_world + V3D(size * 0.01, 0, 0);
+                current.plane_ptr_->normal = V3D::UnitZ();
+                current.plane_ptr_->d = -query.point_world.z();
+                BuildResidualListOMP(map, size, 3, 0, {query}, V3F::Zero(), matches, unmatched);
+                require(matches.size() == 1 &&
+                        (matches[0].center - current.plane_ptr_->center).norm() < 1e-10,
+                        "a valid same-voxel plane must be used before neighbor search");
+                delete current.plane_ptr_;
+                delete neighbor.plane_ptr_;
+            }
+        }
+    }
+    check_normal = previous_check_normal;
 }
 
 int main(int argc, char **argv)
@@ -213,7 +325,9 @@ int main(int argc, char **argv)
 
     testImuProcessing();
     testMissingImuSynchronization();
+    testScanEndIndependentOfPointOrder();
     testParallelPlaneIds();
+    testNeighborVoxelSearch();
 
     scan_count = 719999;
     auto msg = cloudMessage({0, 0.05f, 0.1f});
